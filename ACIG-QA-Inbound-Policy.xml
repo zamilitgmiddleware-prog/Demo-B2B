@@ -1,0 +1,115 @@
+<policies>
+    <!-- Inbound policies: Throttle, authorize, validate, cache, or transform the requests -->
+    <inbound>
+        <base />
+        <include-fragment fragment-id="FilteredDataLogs" />
+        <!-- Set variable -->
+        <set-variable name="serviceName" value="{{B2B-QA-ACIG-Inbound-serviceName}}" />
+        <trace source="ACIG 1.0" severity="information">
+            <message>Custom APIM Logging</message>
+            <metadata name="serviceName" value="@((string)context.Variables["serviceName"])" />
+        </trace>
+        <check-header name="X-Client-Cert" ignore-case="true" failed-check-httpcode="401" failed-check-error-message="Missing Client Certificate header.mTLS is required." />
+        <!-- Retrieve the raw certificate, decode it using a web utility, and remove the BEGIN CERTIFICATE and END CERTIFICATE markers -->
+        <set-variable name="b64" value="@{
+                var raw = context.Request.Headers.GetValueOrDefault("X-Client-Cert","");
+                try {
+                if (!string.IsNullOrEmpty(raw) && (raw.Contains("%") || raw.Contains("+"))) {
+                    raw = System.Net.WebUtility.UrlDecode(raw);
+                }
+                } catch { /* ignore decode errors; continue with raw */ }
+                const string BEGIN = "-----BEGIN CERTIFICATE-----";
+                const string END   = "-----END CERTIFICATE-----";
+                string inner;
+                int s = raw.IndexOf(BEGIN, System.StringComparison.OrdinalIgnoreCase);
+                int e = raw.IndexOf(END,   System.StringComparison.OrdinalIgnoreCase);
+                if (s >= 0 && e > s) {
+                inner = raw.Substring(s + BEGIN.Length, e - (s + BEGIN.Length));
+                } else {
+                inner = raw;
+                }
+                inner = new string(inner.ToCharArray().Where(ch => !char.IsWhiteSpace(ch)).ToArray());
+                return inner;
+                    }" />
+        <!-- Extract the subject from the certificate using System.Security.Cryptography -->
+        <set-variable name="subject" value="@{
+                var b64 = context.Variables.GetValueOrDefault<string>("b64","");
+                if (string.IsNullOrWhiteSpace(b64)) { return "<empty b64>"; }
+                try {
+                var bytes = System.Convert.FromBase64String(b64);
+                var cert  = new System.Security.Cryptography.X509Certificates.X509Certificate2(bytes);
+                return cert.Subject; 
+                    } catch (System.Exception ex) {
+                return "Parse error: " + ex.Message;
+                }
+                }" />
+        <!-- Extract CN from subject -->
+        <set-variable name="cn" value="@{
+                var s = (string)context.Variables["subject"];
+                return s.Split(',')[0].Split('=')[1].Trim();
+                }" />
+        <!-- Extract O from subject-->
+        <!--<set-variable name="org" value="@{
+                var s = (string)context.Variables["subject"];
+                return s.Split(',')[1].Split('=')[1].Trim();
+                }" />-->
+        <!--Delete the X-Client-Cert -->
+        <set-header name="X-Client-Cert" exists-action="delete" />
+        <set-variable name="expectedCN" value="@("{{B2B-ESP-STG-QA-HAL-SSLCertificateCN}}")" />
+        <set-variable name="expectedACIGCN" value="@("{{B2B-QA-ACIG-CertificateCN}}")" />
+        <set-query-parameter name="api-version" exists-action="delete" />
+        <!-- Verify that the CN and O from the request match the certificate's CN and O; if they match, connect to the backend, otherwise return an invalid certificate response -->
+        <choose>
+            <when condition="@(
+                    (string.Equals((string)context.Variables["cn"], (string)context.Variables["expectedCN"], System.StringComparison.OrdinalIgnoreCase))
+                    ||
+                    (string.Equals((string)context.Variables["cn"], (string)context.Variables["expectedACIGCN"], System.StringComparison.OrdinalIgnoreCase))
+    )">
+                <set-backend-service base-url="{{B2B-QA-ORACLESOA-BaseURL}}" />
+                <rewrite-uri template="{{B2B-QA-ORACLESOA-RewriteURI}}" />
+            </when>
+            <otherwise>
+                <return-response>
+                    <set-status code="403" reason="Invalid certificate" />
+                    <set-body>@("Invalid certificate: CN/O mismatch.")</set-body>
+                </return-response>
+            </otherwise>
+        </choose>
+    </inbound>
+    <!-- Backend policies -->
+    <backend>
+        <base />
+    </backend>
+    <!-- Outbound policies -->
+    <outbound>
+        <base />
+    </outbound>
+    <!-- Error handling -->
+    <on-error>
+        <set-header name="ErrorSource" exists-action="override">
+            <value>@(context.LastError.Source)</value>
+        </set-header>
+        <set-header name="ErrorReason" exists-action="override">
+            <value>@(context.LastError.Reason)</value>
+        </set-header>
+        <set-header name="ErrorMessage" exists-action="override">
+            <value>@(context.LastError.Message)</value>
+        </set-header>
+        <set-header name="ErrorScope" exists-action="override">
+            <value>@(context.LastError.Scope)</value>
+        </set-header>
+        <set-header name="ErrorSection" exists-action="override">
+            <value>@(context.LastError.Section)</value>
+        </set-header>
+        <set-header name="ErrorPath" exists-action="override">
+            <value>@(context.LastError.Path)</value>
+        </set-header>
+        <set-header name="ErrorPolicyId" exists-action="override">
+            <value>@(context.LastError.PolicyId)</value>
+        </set-header>
+        <set-header name="ErrorStatusCode" exists-action="override">
+            <value>@(context.Response.StatusCode.ToString())</value>
+        </set-header>
+        <base />
+    </on-error>
+</policies>
