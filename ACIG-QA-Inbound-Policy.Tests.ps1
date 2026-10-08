@@ -1,6 +1,9 @@
-# Requires Pester 5 and Windows PowerShell 5.1 or PowerShell 7 on Windows
+# Requires Pester 5 and PowerShell 7 (pwsh) or Windows PowerShell 5.1 on Windows
 BeforeAll {
     $script:policyPath = Join-Path $PSScriptRoot 'ACIG-QA-Inbound-Policy.xml'
+    if (-not (Test-Path $script:policyPath)) {
+        throw "Policy file not found: $script:policyPath. Commit it next to the test file."
+    }
     $script:raw = Get-Content -Raw -Path $script:policyPath
 
     # Pulls a C# expression body out of the policy and decodes XML entities
@@ -15,8 +18,11 @@ BeforeAll {
     $cnBody      = Get-ExprBody 'name="cn"\s+value="@\{(.*?)\}"\s*/>'
     $condBody    = Get-ExprBody '<when condition="@\((.*?)\)">'
 
-    # Minimal stand-in for the APIM "context" object
+    # Minimal stand-in for the APIM "context" object.
+    # The pragma silences SYSLIB0057 (X509Certificate2 constructor is obsolete in .NET 9).
+    # The real APIM runtime still accepts it, so the policy is not changed.
     $source = @'
+#pragma warning disable SYSLIB0057
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -44,7 +50,10 @@ namespace PolicyHarness {
                       Replace('@@CN@@', $cnBody).Replace('@@COND@@', $condBody)
 
     # Add-Type cannot redefine a type inside one session
-    if (-not ('PolicyHarness.Expr' -as [type])) { Add-Type -TypeDefinition $source }
+    if (-not ('PolicyHarness.Expr' -as [type])) {
+        try   { Add-Type -TypeDefinition $source -IgnoreWarnings -ErrorAction Stop }
+        catch { throw "Harness compile failed. Check the policy C# expressions. $($_.Exception.Message)" }
+    }
 
     # Runs the b64 and subject steps for a given header value
     function script:New-Ctx($Header) {
@@ -313,7 +322,7 @@ Describe "End-to-end decision (real certificates)" {
     }
 }
 
-# Needs a deployed API. Set APIM_URL, and optionally APIM_KEY, APIM_CERT_OK_CN, APIM_CERT_BAD_CN (requires PowerShell 7).
+# Needs a deployed API. Set APIM_URL, and optionally APIM_KEY, APIM_CERT_OK_CN (requires PowerShell 7).
 Describe "APIM integration" -Skip:(-not $env:APIM_URL) {
 
     BeforeAll {
