@@ -2,13 +2,8 @@ name: Demo-B2B Policy Tests
 
 on:
   push:
-    branches: [b2b-feature-launch]
-    paths:
-      - 'Demo-B2B/**'
-      - '.github/workflows/demo-b2b-policy-tests.yml'
+    branches: [main, b2b-feature-launch]
   pull_request:
-    paths:
-      - 'Demo-B2B/**'
   workflow_dispatch:
 
 # Least privilege: the job only reads the repository
@@ -26,6 +21,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: List files (debug)
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -File |
+            Where-Object { $_.FullName -notmatch '\\\.git\\' } |
+            Select-Object -ExpandProperty FullName
+
       - name: Run Pester tests
         shell: pwsh
         run: |
@@ -33,7 +35,8 @@ jobs:
           Import-Module Pester -RequiredVersion 5.5.0
 
           $config = New-PesterConfiguration
-          $config.Run.Path = 'Demo-B2B'
+          # Search the whole checkout, so it works at the repo root or in a subfolder
+          $config.Run.Path = $env:GITHUB_WORKSPACE
           $config.Run.Exit = $true
           $config.Output.Verbosity = 'Detailed'
           $config.TestResult.Enabled = $true
