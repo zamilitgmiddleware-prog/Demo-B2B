@@ -2,7 +2,7 @@ name: Demo-B2B Policy Tests
 
 on:
   push:
-    branches: [main]
+    branches: [b2b-feature-launch]
     paths:
       - 'Demo-B2B/**'
       - '.github/workflows/demo-b2b-policy-tests.yml'
