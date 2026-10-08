@@ -1,0 +1,50 @@
+name: Demo-B2B Policy Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Demo-B2B/**'
+      - '.github/workflows/demo-b2b-policy-tests.yml'
+  pull_request:
+    paths:
+      - 'Demo-B2B/**'
+  workflow_dispatch:
+
+# Least privilege: the job only reads the repository
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          Install-Module Pester -RequiredVersion 5.5.0 -Force -SkipPublisherCheck -Scope CurrentUser
+          Import-Module Pester -RequiredVersion 5.5.0
+
+          $config = New-PesterConfiguration
+          $config.Run.Path = 'Demo-B2B'
+          $config.Run.Exit = $true
+          $config.Output.Verbosity = 'Detailed'
+          $config.TestResult.Enabled = $true
+          $config.TestResult.OutputPath = 'test-results.xml'
+          $config.TestResult.OutputFormat = 'NUnitXml'
+          Invoke-Pester -Configuration $config
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pester-test-results
+          path: test-results.xml
+          if-no-files-found: ignore
